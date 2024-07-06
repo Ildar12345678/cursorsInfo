@@ -112,8 +112,8 @@ func main() {
 	http.Handle("/", fs)
 	http.HandleFunc("/ws", handleConnections)
 	
-	log.Println("http server started on :8080")
-	err := http.ListenAndServe(":8080", nil)
+	log.Println("http server started on :4567")
+	err := http.ListenAndServe(":4567", nil)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
