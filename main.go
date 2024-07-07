@@ -6,7 +6,6 @@ import (
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
 	"strings"
-	"fmt"
 )
 
 var upgrader = websocket.Upgrader{
@@ -41,61 +40,50 @@ func (m Method) String() string {
 	return ""
 }
 
-var cursors = make(map[string]Cursor, 100)
+var (
+	clients = make(map[string]*websocket.Conn)
+	cursors = make(map[string]Cursor, 100)
+	ch      = make(chan Cursor)
+)
 
 func handleConnections(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	
 	sessionID := strings.Split(ws.RemoteAddr().String(), ":")[1]
+	clients[sessionID] = ws
 	
 	var cursorsMove = make(map[string]Cursor, len(cursors))
 	
 	cursorData := make([]Cursor, 0, len(cursors))
-	fmt.Println(len(cursors))
-	for _, c := range cursors {
-		fmt.Printf("%q ", c.SessionID)
-	}
-	fmt.Println()
 	
 	for _, cursor := range cursors {
 		if cursor.Method != LeaveMethod.String() {
-			// fmt.Println("move", cursor.SessionID)
 			cursorsMove[cursor.SessionID] = cursor
 		} else {
-			// fmt.Println("not move", cursor.SessionID)
 			delete(cursors, cursor.SessionID)
+			delete(clients, sessionID)
 		}
 	}
 	for _, cursor := range cursorsMove {
 		cursorData = append(cursorData, cursor)
 	}
-	// fmt.Println("cursorData:", cursorData)
-	if err = ws.WriteJSON(cursorData); err != nil {
-		log.Printf("error in writeJson: %v", err)
-		ws.Close()
-		return
-	}
+	
 	cursor := Cursor{
 		SessionID: sessionID,
 		Method:    MoveMethod.String(),
 		X:         -100,
 		Y:         -100,
 	}
-	cursor.SessionID = sessionID
-	cursor.Method = MoveMethod.String()
 	
 	cursors[sessionID] = cursor
 	for {
 		if err := ws.ReadJSON(&cursor); err != nil {
 			if websocket.IsCloseError(err, websocket.CloseGoingAway) {
 				log.Printf("Client disconnected: %v", sessionID)
-				// levCurs := cursors[sessionID]
 				cursor.Method = LeaveMethod.String()
 				cursors[sessionID] = cursor
-				// fmt.Println("cursors", cursor)
 			} else {
 				log.Printf("error in readJson: %v", err)
 			}
@@ -103,7 +91,20 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cursors[sessionID] = cursor
-		// fmt.Println("cursors", cursors[sessionID].Method)
+		ch <- cursor
+	}
+}
+
+func writeCoords() {
+	for {
+		cursorData := <-ch
+		for _, conn := range clients {
+			if err := conn.WriteJSON(cursorData); err != nil {
+				log.Printf("error in writeJson: %v", err)
+				conn.Close()
+			}
+			
+		}
 	}
 }
 
@@ -111,6 +112,8 @@ func main() {
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
 	http.HandleFunc("/ws", handleConnections)
+	
+	go writeCoords()
 	
 	log.Println("http server started on :4567")
 	err := http.ListenAndServe(":4567", nil)
