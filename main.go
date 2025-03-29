@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"log"
 	"github.com/gorilla/websocket"
-	_ "github.com/lib/pq"
 	"strings"
 )
 
@@ -54,20 +53,13 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.Split(ws.RemoteAddr().String(), ":")[1]
 	clients[sessionID] = ws
 	
-	var cursorsMove = make(map[string]Cursor, len(cursors))
-	
-	cursorData := make([]Cursor, 0, len(cursors))
 	
 	for _, cursor := range cursors {
-		if cursor.Method != LeaveMethod.String() {
-			cursorsMove[cursor.SessionID] = cursor
-		} else {
+		if cursor.Method == LeaveMethod.String() {
 			delete(cursors, cursor.SessionID)
 			delete(clients, sessionID)
+		} else {
 		}
-	}
-	for _, cursor := range cursorsMove {
-		cursorData = append(cursorData, cursor)
 	}
 	
 	cursor := Cursor{
@@ -82,13 +74,12 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 		if err := ws.ReadJSON(&cursor); err != nil {
 			if websocket.IsCloseError(err, websocket.CloseGoingAway) {
 				log.Printf("Client disconnected: %v", sessionID)
-				cursor.Method = LeaveMethod.String()
-				cursors[sessionID] = cursor
+				delete(clients, sessionID)
+				ws.Close()
+				break
 			} else {
 				log.Printf("error in readJson: %v", err)
 			}
-			ws.Close()
-			return
 		}
 		cursors[sessionID] = cursor
 		ch <- cursor
@@ -98,9 +89,10 @@ func handleConnections(w http.ResponseWriter, r *http.Request) {
 func writeCoords() {
 	for {
 		cursorData := <-ch
-		for _, conn := range clients {
-			if err := conn.WriteJSON(cursorData); err != nil {
+		for clientID, conn := range clients {
+			if err := conn.WriteJSON(&cursorData); err != nil {
 				log.Printf("error in writeJson: %v", err)
+				delete(clients, clientID)
 				conn.Close()
 			}
 			
